@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-Wilcoxon signed-rank test + biểu đồ phân bố Δ.
-Bản v5: cột Δ=0 trong histogram có cùng width với các cột khác
-        (không bị đè, không nhỏ hơn), bỏ rug plot, boxplot giữ nguyên.
+Wilcoxon signed-rank test + biểu đồ phân bố Δ + thống kê tách Δ dương/âm.
+Bản v6.1: giữ nguyên toàn bộ phân tích của v5, thêm thống kê tách
+          Δ > 0 / Δ < 0 cho cả hai nhánh, sửa trục Y histogram chia
+          1 đơn vị mẫu cho cả hai panel.
 
 Input : bootstrap_both.tsv
 Output:
-  - wilcoxon_test.txt              (báo cáo văn bản)
-  - wilcoxon_test_summary.csv      (bảng tóm tắt)
-  - wilcoxon_test.png              (histogram Δ có dấu + CI)
-  - wilcoxon_distribution_check.png (boxplot 1x2 — giữ y nguyên)
+  - wilcoxon_test.txt                 (báo cáo văn bản)
+  - wilcoxon_test_summary.csv         (bảng tóm tắt)
+  - wilcoxon_test.png                 (histogram Δ có dấu + CI)
+  - wilcoxon_distribution_check.png   (boxplot 1x2 — giữ y nguyên)
+  - wilcoxon_split_stats.txt          (thống kê tách Δ dương/âm)
+  - wilcoxon_split_stats.csv          (bảng tách dạng CSV)
 """
 
 import os
@@ -18,6 +21,7 @@ import pandas as pd
 from scipy import stats
 from scipy.stats import skew, probplot
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 
 # ============================================================
 # CẤU HÌNH
@@ -29,6 +33,8 @@ OUTPUT_TXT = os.path.join(OUTPUT_DIR, "wilcoxon_test.txt")
 OUTPUT_CSV = os.path.join(OUTPUT_DIR, "wilcoxon_test_summary.csv")
 OUTPUT_PNG_MAIN = os.path.join(OUTPUT_DIR, "wilcoxon_test.png")
 OUTPUT_PNG_DIST = os.path.join(OUTPUT_DIR, "wilcoxon_distribution_check.png")
+OUTPUT_SPLIT_TXT = os.path.join(OUTPUT_DIR, "wilcoxon_split_stats.txt")
+OUTPUT_SPLIT_CSV = os.path.join(OUTPUT_DIR, "wilcoxon_split_stats.csv")
 
 REFERENCE_NAMES = ['BJAB07104', 'NC_021726.1']
 N_BOOTSTRAP = 10000
@@ -72,7 +78,7 @@ BRANCHES = [
 ]
 
 # ============================================================
-# PHÂN TÍCH
+# PHÂN TÍCH CHÍNH
 # ============================================================
 results = {}
 
@@ -163,7 +169,7 @@ for br in BRANCHES:
               f"xu hướng.")
 
 # ============================================================
-# LƯU TEXT
+# LƯU TEXT CHÍNH
 # ============================================================
 with open(OUTPUT_TXT, "w", encoding="utf-8") as f:
     f.write("WILCOXON SIGNED-RANK TEST + KIỂM TRA PHÂN PHỐI\n")
@@ -215,7 +221,7 @@ with open(OUTPUT_TXT, "w", encoding="utf-8") as f:
 print(f"\n✅ Đã lưu text: {OUTPUT_TXT}")
 
 # ============================================================
-# LƯU CSV
+# LƯU CSV TÓM TẮT
 # ============================================================
 rows = []
 for br in BRANCHES:
@@ -239,11 +245,151 @@ for br in BRANCHES:
         'p_greater': f"{r['p_greater']:.4g}",
     })
 pd.DataFrame(rows).to_csv(OUTPUT_CSV, sep='\t', index=False)
-print(f"✅ Đã lưu CSV: {OUTPUT_CSV}")
+print(f"✅ Đã lưu CSV tóm tắt: {OUTPUT_CSV}")
+
+# ============================================================
+# THỐNG KÊ MÔ TẢ TÁCH Δ DƯƠNG / Δ ÂM
+# ============================================================
+def describe_group(values, group_label):
+    """Tính thống kê mô tả đầy đủ cho một nhóm Δ."""
+    a = np.asarray(values, dtype=int)
+    if len(a) == 0:
+        return None
+    return {
+        'group': group_label,
+        'n': len(a),
+        'min': int(a.min()),
+        'max': int(a.max()),
+        'mean': float(a.mean()),
+        'median': float(np.median(a)),
+        'q1': float(np.percentile(a, 25)),
+        'q3': float(np.percentile(a, 75)),
+        'sum': int(a.sum()),
+    }
+
+
+split_results = {}
+print("\n" + "=" * 78)
+print("THỐNG KÊ TÁCH Δ DƯƠNG / Δ ÂM")
+print("=" * 78)
+
+for br in BRANCHES:
+    r = results[br['key']]
+    deltas = r['deltas']
+
+    pos_vals = deltas[deltas > 0]
+    neg_vals = deltas[deltas < 0]
+
+    d_pos = describe_group(pos_vals, 'improved')
+    d_neg = describe_group(neg_vals, 'worsened')
+    split_results[br['key']] = {
+        'label': r['label'],
+        'pos': d_pos,
+        'neg': d_neg,
+    }
+
+    print(f"\n{r['label']}:")
+
+    if d_pos:
+        print(f"  Δ > 0 (cải thiện): n = {d_pos['n']}")
+        print(f"    min = {d_pos['min']:+d}, max = {d_pos['max']:+d}")
+        print(f"    mean = {d_pos['mean']:+.2f}, "
+              f"median = {d_pos['median']:+.2f}")
+        print(f"    Q1 = {d_pos['q1']:+.1f}, Q3 = {d_pos['q3']:+.1f}")
+        print(f"    Tổng Δ = {d_pos['sum']:+d}")
+
+    if d_neg:
+        print(f"  Δ < 0 (giảm): n = {d_neg['n']}")
+        print(f"    min = {d_neg['min']:+d}, max = {d_neg['max']:+d}")
+        print(f"    mean = {d_neg['mean']:+.2f}, "
+              f"median = {d_neg['median']:+.2f}")
+        print(f"    Q1 = {d_neg['q1']:+.1f}, Q3 = {d_neg['q3']:+.1f}")
+        print(f"    Tổng Δ = {d_neg['sum']:+d}")
+
+    if d_pos and d_neg:
+        print(f"  So sánh:")
+        print(f"    Tỷ lệ n (cải thiện/giảm) = "
+              f"{d_pos['n']}/{d_neg['n']} = "
+              f"{d_pos['n']/d_neg['n']:.2f}")
+        print(f"    Tỷ lệ |mean| = {abs(d_pos['mean'])/abs(d_neg['mean']):.2f}")
+        print(f"    Tỷ lệ |median| = "
+              f"{abs(d_pos['median'])/abs(d_neg['median']):.2f}")
+        print(f"    Tỷ lệ tổng Δ (dương/âm) = "
+              f"{d_pos['sum']}/{abs(d_neg['sum'])} = "
+              f"{d_pos['sum']/abs(d_neg['sum']):.2f}")
+
+# ============================================================
+# LƯU SPLIT TXT
+# ============================================================
+with open(OUTPUT_SPLIT_TXT, "w", encoding="utf-8") as f:
+    f.write("THỐNG KÊ MÔ TẢ Δ TÁCH THEO HƯỚNG THAY ĐỔI\n")
+    f.write("=" * 78 + "\n\n")
+    f.write("Mục đích: làm nổi bật hiệu quả thực sự của core genome bằng\n")
+    f.write("cách tách riêng nhóm cải thiện (Δ > 0) và nhóm giảm (Δ < 0),\n")
+    f.write("thay vì chỉ xem median/mean của toàn bộ nhóm (bị kéo xuống\n")
+    f.write("bởi các mẫu giảm).\n\n")
+
+    for br in BRANCHES:
+        sr = split_results[br['key']]
+        f.write("=" * 78 + "\n")
+        f.write(f"{sr['label']}\n")
+        f.write("=" * 78 + "\n\n")
+
+        for d, title in [(sr['pos'], 'Δ > 0 (cải thiện)'),
+                          (sr['neg'], 'Δ < 0 (giảm)')]:
+            if d is None:
+                continue
+            f.write(f"  {title}:\n")
+            f.write(f"    n = {d['n']}\n")
+            f.write(f"    min = {d['min']:+d}, max = {d['max']:+d}\n")
+            f.write(f"    mean = {d['mean']:+.2f}\n")
+            f.write(f"    median = {d['median']:+.2f}\n")
+            f.write(f"    Q1 = {d['q1']:+.1f}, Q3 = {d['q3']:+.1f}\n")
+            f.write(f"    Tổng Δ = {d['sum']:+d}\n\n")
+
+        if sr['pos'] and sr['neg']:
+            dp, dn = sr['pos'], sr['neg']
+            f.write(f"  So sánh:\n")
+            f.write(f"    Tỷ lệ n = {dp['n']}/{dn['n']} = "
+                    f"{dp['n']/dn['n']:.2f}\n")
+            f.write(f"    Tỷ lệ |mean| = "
+                    f"{abs(dp['mean'])/abs(dn['mean']):.2f}\n")
+            f.write(f"    Tỷ lệ |median| = "
+                    f"{abs(dp['median'])/abs(dn['median']):.2f}\n")
+            f.write(f"    Tỷ lệ tổng Δ = "
+                    f"{dp['sum']}/{abs(dn['sum'])} = "
+                    f"{dp['sum']/abs(dn['sum']):.2f}\n\n")
+
+print(f"\n✅ Đã lưu split stats text: {OUTPUT_SPLIT_TXT}")
+
+# ============================================================
+# LƯU SPLIT CSV
+# ============================================================
+split_rows = []
+for br in BRANCHES:
+    sr = split_results[br['key']]
+    for d, group_label in [(sr['pos'], 'Δ > 0 (cải thiện)'),
+                            (sr['neg'], 'Δ < 0 (giảm)')]:
+        if d is None:
+            continue
+        split_rows.append({
+            'branch': br['key'],
+            'group': group_label,
+            'n': d['n'],
+            'min': d['min'],
+            'max': d['max'],
+            'mean': f"{d['mean']:.2f}",
+            'median': f"{d['median']:.2f}",
+            'q1': f"{d['q1']:.1f}",
+            'q3': f"{d['q3']:.1f}",
+            'sum': d['sum'],
+        })
+pd.DataFrame(split_rows).to_csv(OUTPUT_SPLIT_CSV, sep='\t', index=False)
+print(f"✅ Đã lưu split stats CSV: {OUTPUT_SPLIT_CSV}")
 
 # ============================================================
 # BIỂU ĐỒ 1 — HISTOGRAM Δ CÓ DẤU + CI
-# (cột Δ=0 cùng width với các cột khác, không bị đè, không rug plot)
+# (cột Δ=0 cùng width, không rug plot, trục Y chia 1 đơn vị mẫu)
 # ============================================================
 fig, axes = plt.subplots(1, 2, figsize=(15, 6.5))
 
@@ -256,30 +402,25 @@ for ax, br in zip(axes, BRANCHES):
     zero_count = int((deltas == 0).sum())
 
     span = max(abs(r['min']), abs(r['max']))
-    # Bin rộng 10: vùng âm kết thúc ở -5, vùng dương bắt đầu từ +5
-    neg_bins = np.arange(-span - 5, -4.999, 10)   # ... -25, -15, -5
-    pos_bins = np.arange(5, span + 15, 10)         # 5, 15, 25 ...
+    neg_bins = np.arange(-span - 5, -4.999, 10)
+    pos_bins = np.arange(5, span + 15, 10)
 
-    # Histogram Δ < 0
     if len(neg_vals) > 0 and len(neg_bins) > 1:
         ax.hist(neg_vals, bins=neg_bins,
                 color='#C44E52', alpha=0.8,
                 edgecolor='black', linewidth=0.5,
                 label='Δ < 0 (giảm)')
-    # Histogram Δ > 0
     if len(pos_vals) > 0 and len(pos_bins) > 1:
         ax.hist(pos_vals, bins=pos_bins,
                 color='#55A868', alpha=0.8,
                 edgecolor='black', linewidth=0.5,
                 label='Δ > 0 (cải thiện)')
-    # Cột Δ = 0: width = 10 (cùng width với histogram), từ -5 đến +5
     if zero_count > 0:
         ax.bar([0], [zero_count], width=10,
                color='#BDBDBD', alpha=0.9,
                edgecolor='black', linewidth=0.8,
                label='Δ = 0 (không đổi)')
 
-    # Đường tham chiếu
     ax.axvline(0, color='black', linestyle='--', linewidth=1)
     ax.axvline(r['median'], color='blue', linestyle=':',
                linewidth=2,
@@ -299,6 +440,10 @@ for ax, br in zip(axes, BRANCHES):
     ax.legend(fontsize=8, loc='upper right')
     ax.grid(axis='y', alpha=0.3)
 
+    # Chia vạch trục Y theo 1 đơn vị mẫu cho cả hai panel
+    ax.yaxis.set_major_locator(
+        MaxNLocator(nbins=20, integer=True, steps=[1]))
+
 plt.suptitle('Wilcoxon Signed-Rank Test — Xu hướng cải thiện Bootstrap\n'
              '(nhóm test chính, đã loại mẫu cả hai đều =100)',
              fontsize=13, fontweight='bold', y=1.02)
@@ -308,7 +453,7 @@ plt.close()
 print(f"✅ Đã lưu biểu đồ chính: {OUTPUT_PNG_MAIN}")
 
 # ============================================================
-# BIỂU ĐỒ 2 — BOXPLOT (GIỮ Y NGUYÊN NHƯ SCRIPT GỐC)
+# BIỂU ĐỒ 2 — BOXPLOT (GIỮ Y NGUYÊN)
 # ============================================================
 fig_dist, axes_dist = plt.subplots(2, 2, figsize=(14, 10))
 
@@ -317,7 +462,6 @@ for i, br in enumerate(BRANCHES):
     deltas = r['deltas_nz']
     sk = r['skewness']
 
-    # QQ plot
     ax_qq = axes_dist[i, 0]
     probplot(deltas, dist="norm", plot=ax_qq)
     ax_qq.set_title(f"QQ plot — {r['label']}\n"
@@ -327,7 +471,6 @@ for i, br in enumerate(BRANCHES):
     ax_qq.set_ylabel('Sample quantiles (Δ)', fontsize=10)
     ax_qq.grid(alpha=0.3)
 
-    # Boxplot — GIỮ Y NGUYÊN
     ax_bx = axes_dist[i, 1]
     box = ax_bx.boxplot([deltas], vert=True, patch_artist=True,
                         labels=[r['label']])
@@ -358,10 +501,10 @@ plt.close()
 print(f"✅ Đã lưu biểu đồ kiểm tra phân phối: {OUTPUT_PNG_DIST}")
 
 # ============================================================
-# TÓM TẮT
+# TÓM TẮT CHÍNH
 # ============================================================
 print("\n" + "=" * 78)
-print("TÓM TẮT")
+print("TÓM TẮT CHÍNH")
 print("=" * 78)
 print(f"\n{'Loại nhánh':<28} {'n':>4} {'median':>8} {'mean':>8} "
       f"{'skew':>6} {'CI 95% median':>18} {'p (2-side)':>12}")
@@ -388,4 +531,33 @@ for br in BRANCHES:
         print(f"  ❌ {r['label']}: median Δ không khác 0 "
               f"(p = {r['p_two']:.4g})")
 
+# ============================================================
+# TÓM TẮT SPLIT
+# ============================================================
+print("\n" + "=" * 78)
+print("TÓM TẮT THỐNG KÊ TÁCH Δ")
+print("=" * 78)
+print(f"\n{'Nhánh':<28} {'Nhóm':<20} {'n':>4} {'median':>8} "
+      f"{'mean':>8} {'Q1':>6} {'Q3':>6}")
+print("-" * 78)
+for br in BRANCHES:
+    sr = split_results[br['key']]
+    for d, gname in [(sr['pos'], 'Δ > 0 (cải thiện)'),
+                      (sr['neg'], 'Δ < 0 (giảm)')]:
+        if d is None:
+            continue
+        print(f"{br['label']:<28} {gname:<20} {d['n']:>4} "
+              f"{d['median']:>+7.2f} {d['mean']:>+7.2f} "
+              f"{d['q1']:>+6.1f} {d['q3']:>+6.1f}")
+
 print()
+print("=" * 60)
+print("✅ HOÀN THÀNH")
+print("=" * 60)
+print(f"Files đã xuất trong {OUTPUT_DIR}:")
+print("  - wilcoxon_test.txt")
+print("  - wilcoxon_test_summary.csv")
+print("  - wilcoxon_test.png")
+print("  - wilcoxon_distribution_check.png")
+print("  - wilcoxon_split_stats.txt")
+print("  - wilcoxon_split_stats.csv")
